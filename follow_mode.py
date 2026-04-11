@@ -271,7 +271,7 @@ class Logic:
         
         track_id = obs.get("track_id")
         # If we're locked onto a specific person, reject other IDs
-        if self._locked_track_id is not None and track_id != self._locked_track_id:
+        if self.locked_track_id is not None and track_id != self.locked_track_id:
             return None   # different person — ignore
 
         # Prefer the server-provided pixel width; fall back to area-derived.
