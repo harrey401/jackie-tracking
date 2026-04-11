@@ -25,7 +25,7 @@ from collections import deque
 # ─── Thresholds (metres) ───────────────────────────────────────────────────
 FOLLOW_DISTANCE_M        = 2.0    # max distance at which we try to follow
 TARGET_FOLLOW_DISTANCE_M = 0.8    # desired stopping distance
-COLLISION_DISTANCE_M     = 0.10   # "emergency close"
+COLLISION_DISTANCE_M     = 0.33   # "emergency close"
 
 # ─── Camera geometry ───────────────────────────────────────────────────────
 FRAME_WIDTH_PX  = 640             # assumed frame width 
