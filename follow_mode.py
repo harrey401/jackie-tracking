@@ -202,6 +202,8 @@ class Logic:
         # Sign flip — Jackie's /cmd_vel_mux/input/navi_override expects
         # negative angular.z to rotate toward a user on the right of frame.
         ang_z = -ang_z
+        
+        lin_x = -lin_x
 
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is the
         # true hard ceiling.
@@ -258,9 +260,7 @@ class Logic:
         if face_bounds is None:
             return float("inf")
         w_px = face_bounds["w_px"]
-        if w_px <= 0:
-            return float("inf")
-        return (FACE_WIDTH_M * FOCAL_LENGTH_PX) / w_px
+        return float("inf") if w_px <= 0 else (FACE_WIDTH_M * FOCAL_LENGTH_PX) / w_px
 
     def _out(self, linear, angular):
         self._prev_linear = linear
