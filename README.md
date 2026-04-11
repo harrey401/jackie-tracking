@@ -64,25 +64,11 @@ Every ~10 seconds the SMAIT server runs `git pull` on this repo. If a file chang
 
 ---
 
-## What lives in this repo vs in the SMAIT server
+## What you have to work with
 
-You don't need access to the rest of the SMAIT codebase. You should be able to do **everything you need** in just these two files. Here's the boundary so it's not a mystery:
+You get a face observation each tick and you return a velocity. Everything else — face detection, the camera feed, sending commands to the wheels — is already done for you. You don't need to touch any other code.
 
-**Lives in this repo (yours to edit):**
-- The `Logic` class — `reset()` and `step(obs) -> {linear, angular}`.
-- All tunable constants (gains, deadzones, smoothing, max speeds).
-- Any helper functions you want to add.
-- Any per-skill state you keep on `self`.
-
-**Lives in the SMAIT server (Gow's code, you don't touch):**
-- The face perception pipeline that produces `face_visible`, `face_cx`, `face_area`, etc.
-- The control loop that calls your `step()` ~10 times per second.
-- The chassis driver that takes your `linear`/`angular` and turns it into wheel commands.
-- The Tracking Tests page in the Android app and the WebSocket messages it sends.
-- The hot-reload + git-pull machinery.
-- Hard safety caps (`|linear| ≤ 0.25 m/s`, `|angular| ≤ 1.5 rad/s`) applied AFTER your `step()`.
-
-**If you need something that isn't in `obs`** — for example, raw camera frames, the user's distance in meters, multiple faces, IMU data, anything — that's a server change. Ask Gow. He'll add the field to `obs` and you'll see it on the next reload. Don't try to import SMAIT modules from your file — they're not in your import path on purpose.
+If at some point you want a field in `obs` that isn't there yet (for example: distance in meters, multiple faces, the raw camera frame), tell Gow and he'll add it. The contract is meant to grow as the project needs it.
 
 ---
 
@@ -223,18 +209,3 @@ You can iterate as fast as you can commit. The server never restarts.
 
 **Heads up:** if you tap START while the *other* skill is running, the server stops the other one first. You can't have both running at the same time — they both want the chassis.
 
----
-
-## Things you can NOT do from this file (and what to ask Gow for)
-
-| You want to… | Why you can't | Ask Gow for |
-|---|---|---|
-| Read the raw camera frame | Not exposed in `obs` | Add `frame_jpeg` to `obs` |
-| Get distance in meters | Only `face_area` (px²) is given | Calibrated depth via face width or stereo |
-| React to multiple faces at once | Only the locked target track is given | List of all visible faces in `obs` |
-| Run faster than 10 Hz | Loop interval is fixed in the controller | Bump control rate or expose it |
-| Use IMU / lidar / map data | Not exposed | Add the field to `obs` |
-| Talk to the chassis directly (e.g. send a `/poi` goal) | This file only returns `linear`/`angular` | Use the existing nav system, not tracking |
-| Read or write files | The loader runs `step()` in-process — side effects are bad | Don't. Tell Gow what you actually need. |
-
-When in doubt: **return values from `step()`, don't reach outside the function.**
