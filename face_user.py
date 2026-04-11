@@ -21,15 +21,15 @@ from collections import deque
 FRAME_WIDTH_PX = 640
 
 # ─── Pan PID gains (same magnitudes as follow_mode.py) ─────────────────────
-PAN_KP = 0.003
+PAN_KP = 0.0018
 PAN_KI = 0.0001
 PAN_KD = 0.001
 
 # ─── Velocity feed-forward (same name as follow_mode.py) ──────────────────
-PAN_FF_GAIN = 0.002
+PAN_FF_GAIN = 0.0012
 
 # ─── Output clamp ──────────────────────────────────────────────────────────
-MAX_ANGULAR = 0.8
+MAX_ANGULAR = 0.5
 
 
 class _PID:
@@ -92,6 +92,10 @@ class Logic:
         vel_ff = self._last_target_vel_x * PAN_FF_GAIN
         vel_ff = max(-0.3, min(0.3, vel_ff))
         ang_z += vel_ff
+
+        # Sign flip — Jackie's /cmd_vel_mux/input/navi_override expects
+        # negative angular.z to rotate toward a user on the right of frame.
+        ang_z = -ang_z
 
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is
         # the true hard ceiling.

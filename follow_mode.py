@@ -199,6 +199,10 @@ class Logic:
         vel_ff = max(-0.3, min(0.3, vel_ff))
         ang_z += vel_ff
 
+        # Sign flip — Jackie's /cmd_vel_mux/input/navi_override expects
+        # negative angular.z to rotate toward a user on the right of frame.
+        ang_z = -ang_z
+
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is the
         # true hard ceiling.
         ang_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, ang_z))
