@@ -23,8 +23,8 @@ from collections import deque
 
 
 # ─── Thresholds (metres) ───────────────────────────────────────────────────
-FOLLOW_DISTANCE_M        = 2.0    # max distance at which we try to follow
-TARGET_FOLLOW_DISTANCE_M = 0.8    # desired stopping distance
+FOLLOW_DISTANCE_M        = 3.0    # max distance at which we try to follow
+TARGET_FOLLOW_DISTANCE_M = 0.5    # desired stopping distance
 COLLISION_DISTANCE_M     = 0.33   # "emergency close"
 
 # ─── Camera geometry ───────────────────────────────────────────────────────
@@ -118,9 +118,7 @@ class Logic:
         self._prev_angular = 0.0
 
     # ── Main tick ──────────────────────────────────────────────────────
-    """
-    The step() function 
-    """
+
     def step(self, obs):  # sourcery skip: extract-duplicate-method
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
