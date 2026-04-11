@@ -13,9 +13,13 @@ Upgrades over the earlier baseline:
   - Output slew-rate limit (caps angular acceleration, prevents jerk)
   - Detection quality gate (rejects tiny hallucinated faces)
   - Graceful lost-face decay (hold-then-ramp, no abrupt stops)
-  - MIN_KICK floor — Jackie's chassis needs ≥ ~0.22 rad/s to actually
-    rotate. Smaller commands vanish into wheel friction. Floored *after*
-    the deadzone so we only kick when motion is actually wanted.
+
+NO MIN_KICK in v2: PAN_KP=1.6 on normalized error is strong enough that
+any meaningful off-center error naturally produces ≥ the chassis friction
+threshold. Adding a kick floor causes bang-bang at the deadzone edge
+(tracker jitter crosses the edge → output snaps between 0 and ±kick).
+Small residual errors produce sub-threshold output and the chassis
+quietly parks close-to-centered — which is what you want.
 
 Sign convention: face on the RIGHT of frame (face_cx > 0.5) → Jackie must
 rotate RIGHT → NEGATIVE angular.z on /cmd_vel_mux/input/navi_override.
@@ -52,10 +56,6 @@ MAX_ANGULAR_ACCEL = 3.0  # rad/s²
 
 # Hard speed ceiling (server also clamps)
 MAX_ANGULAR = 0.8
-
-# Chassis friction floor — commands below this vanish into wheel friction.
-# Only applied when the PID actually wants motion (outside the deadzone).
-MIN_KICK = 0.22
 
 # Detection quality gate — reject faces smaller than this as noise
 MIN_FACE_W_NORM = 0.03
@@ -168,11 +168,6 @@ class Logic:
 
         # Hard clamp
         raw_output = max(-MAX_ANGULAR, min(MAX_ANGULAR, raw_output))
-
-        # Chassis friction floor — only kick when motion is actually wanted
-        # (error_effective != 0 means we are outside the deadzone).
-        if error_effective != 0.0 and 0.0 < abs(raw_output) < MIN_KICK:
-            raw_output = MIN_KICK if raw_output > 0 else -MIN_KICK
 
         # Slew-rate limit
         output = self._rate_limit(raw_output, dt)
