@@ -76,6 +76,23 @@ class Logic:
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
 
+        # ═══ DIAGNOSTIC MODE ═══════════════════════════════════════════════
+        # Hard-coded constant rotation to isolate chassis path from face
+        # detection + PID. If Jackie rotates at all, the chassis/controller
+        # pipeline is fine and the bug is upstream (face detection or PID).
+        # If Jackie still doesn't move, the bug is in the controller/chassis
+        # path. Throttled print so we can see obs in the server log.
+        self._t_accum  # no-op
+        if int(self._t_accum * 2) != int((self._t_accum - dt) * 2):
+            print(
+                f"[face_user DIAG] face_visible={obs.get('face_visible')} "
+                f"face_cx={obs.get('face_cx')} dt={dt:.3f} "
+                f"-> angular=0.3 (forced)",
+                flush=True,
+            )
+        return {"linear": 0.0, "angular": 0.3}
+        # ═══════════════════════════════════════════════════════════════════
+
         # No face → stop rotating. No scanning.
         if not obs.get("face_visible") or obs.get("face_cx") is None:
             return {"linear": 0.0, "angular": 0.0}
