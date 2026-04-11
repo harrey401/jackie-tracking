@@ -33,7 +33,7 @@ MAX_ANGULAR = 0.8
 
 
 class _PID:
-    """Same PID as in follow_mode.py. Ported from Jason's PidController.kt."""
+    """Same PID as in follow_mode.py. Ported from PidController.kt."""
     def __init__(self, kp, ki, kd):
         self.kp = kp
         self.ki = ki
