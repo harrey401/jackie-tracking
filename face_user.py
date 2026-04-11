@@ -21,7 +21,7 @@ from collections import deque
 FRAME_WIDTH_PX = 640
 
 # ─── Pan PID gains (same magnitudes as follow_mode.py) ─────────────────────
-PAN_KP = 0.0025
+PAN_KP = 0.003
 PAN_KI = 0.0001
 PAN_KD = 0.001
 
@@ -32,11 +32,10 @@ PAN_FF_GAIN = 0.0015
 MAX_ANGULAR = 0.6
 
 # ─── Chassis deadband compensation ────────────────────────────────────────
-# Jackie's chassis doesn't start rotating below ~0.15 rad/s. Any non-zero
-# command smaller than this vanishes into friction. Snap small-but-nonzero
-# outputs up to the minimum so tracking stays responsive near center.
-DEADBAND_PX = 20       # within ±20 px of center → don't bother rotating
-MIN_KICK = 0.18        # rad/s — floor when we DO want to rotate
+# Jackie's chassis needs ≥~0.22 rad/s to overcome rotation friction.
+# Deadband in pixels: within ±8 px of center = already facing user, stop.
+DEADBAND_PX = 8
+MIN_KICK = 0.22        # rad/s — floor when we DO want to rotate
 
 
 class _PID:
@@ -75,23 +74,6 @@ class Logic:
     def step(self, obs):
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
-
-        # ═══ DIAGNOSTIC MODE ═══════════════════════════════════════════════
-        # Hard-coded constant rotation to isolate chassis path from face
-        # detection + PID. If Jackie rotates at all, the chassis/controller
-        # pipeline is fine and the bug is upstream (face detection or PID).
-        # If Jackie still doesn't move, the bug is in the controller/chassis
-        # path. Throttled print so we can see obs in the server log.
-        self._t_accum  # no-op
-        if int(self._t_accum * 2) != int((self._t_accum - dt) * 2):
-            print(
-                f"[face_user DIAG] face_visible={obs.get('face_visible')} "
-                f"face_cx={obs.get('face_cx')} dt={dt:.3f} "
-                f"-> angular=0.3 (forced)",
-                flush=True,
-            )
-        return {"linear": 0.0, "angular": 0.3}
-        # ═══════════════════════════════════════════════════════════════════
 
         # No face → stop rotating. No scanning.
         if not obs.get("face_visible") or obs.get("face_cx") is None:
