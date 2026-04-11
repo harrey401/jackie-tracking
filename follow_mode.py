@@ -1,13 +1,8 @@
-"""Follow Me — server-side Python port of Jason Chin's FollowController.kt.
+"""Follow Me — server-side Python port of FollowController.kt.
 
-Ported from: smait-jackie-app/app/src/main/java/com/gow/smaitrobot/follow/
-              FollowController.kt (main branch, with the unmerged
-              "Updated Rotational Motion" intent folded back in)
-
-Original author: Jason Chin (JayHc21) — Android on-device version.
 Port notes:
   - Kotlin → Python. Same FSM, same gains, same thresholds.
-  - His "Updated Rotational Motion" commit tried to add a Kalman-velocity
+  - "Updated Rotational Motion" commit tried to add a Kalman-velocity
     feed-forward but referenced a method (`targetTrack.velocityX()`) that
     wasn't exposed on KalmanTrack, so it didn't compile. Here we estimate
     face velocity from `face_cx` history instead — same intent, works now.
@@ -15,7 +10,7 @@ Port notes:
     provides an already-associated face in `obs`. Logic is unchanged.
   - OBSTACLE / COLLISION states are kept (as in the original). They have
     no real trigger yet because there's no proximity sensor in `obs` —
-    Jason can wire them up once depth/lidar lands in `obs`.
+    Can wire them up once depth/lidar lands in `obs`.
   - Companion-object `lastTargetVelX` and `scanDirection` are now instance
     state (avoiding the thread-safety issue the Kotlin version had).
 
@@ -33,7 +28,7 @@ TARGET_FOLLOW_DISTANCE_M = 0.8    # desired stopping distance
 COLLISION_DISTANCE_M     = 0.10   # "emergency close"
 
 # ─── Camera geometry ───────────────────────────────────────────────────────
-FRAME_WIDTH_PX  = 640             # assumed frame width (matches Jason's const)
+FRAME_WIDTH_PX  = 640             # assumed frame width 
 FOCAL_LENGTH_PX = 600.0           # calibrate per camera
 FACE_WIDTH_M    = 0.165           # avg adult face ~16.5cm
 
@@ -45,12 +40,12 @@ DEG_90_RAD = math.pi / 2.0
 # ─── Timing ────────────────────────────────────────────────────────────────
 COLLISION_PAUSE_S = 3.0
 
-# ─── PID gains (Jason's original) ──────────────────────────────────────────
+# ─── PID gains ──────────────────────────────────────────
 PAN_KP  = 0.003
 PAN_KI  = 0.0001
 PAN_KD  = 0.001
 
-# DIST_KP retuned for metre-based distance error. Jason's original 0.0003
+# DIST_KP retuned for metre-based distance error
 # was calibrated against pixel² area error (magnitudes in the thousands);
 # now that we control on meters (magnitudes ~0..1.5), the gain must be ~1000×
 # larger to produce sensible linear speed. Rough sizing: at max error 1.2m
@@ -59,10 +54,10 @@ DIST_KP = 0.25
 DIST_KI = 0.0
 DIST_KD = 0.15
 
-# ─── Feed-forward (from Jason's unmerged update) ───────────────────────────
+# ─── Feed-forward ───────────────────────────
 PAN_FF_GAIN = 0.002               # applied to face_cx velocity (px/s)
 
-# ─── Output clamps (match Jason's .coerceIn values) ────────────────────────
+# ─── Output clamps ────────────────────────
 MAX_ANGULAR = 0.8
 MAX_LINEAR  = 0.3
 
@@ -77,7 +72,7 @@ CLEAR_CHECK    = "CLEAR_CHECK"
 
 
 class _PID:
-    """Port of Jason's PidController.kt. Same math, nothing fancy."""
+    """Port of PidController.kt. Same math, nothing fancy."""
     def __init__(self, kp, ki, kd):
         self.kp = kp
         self.ki = ki
@@ -97,7 +92,7 @@ class _PID:
 
 
 class Logic:
-    """Server-side Python port of Jason's on-device FollowController."""
+    """Server-side Python port of on-device FollowController."""
 
     def __init__(self):
         self._pan_pid = _PID(PAN_KP, PAN_KI, PAN_KD)
@@ -141,7 +136,7 @@ class Logic:
                 if t1 - t0 > 1e-3:
                     self._last_target_vel_x = (c1 - c0) / (t1 - t0)
 
-        # FSM — mirrors Jason's tick() exactly
+        # FSM
         if self._fsm == FOLLOWING:
             if face_bounds is None or dist_m > FOLLOW_DISTANCE_M:
                 # face lost / out of range → scan
@@ -185,14 +180,13 @@ class Logic:
         # unknown state — be safe
         return self._out(0.0, 0.0)
 
-    # ── PID drive toward face (Jason's driveTowardFace, meters-based) ─────
+    # ── PID drive toward face (meters-based) ─────
 
     def _drive_toward_face(self, face_bounds, dist_m, dt):
-        # Lateral error in PIXELS, to match Jason's kp scale
+        # Lateral error in PIXELS
         dx = face_bounds["cx_px"] - FRAME_WIDTH_PX / 2.0
 
-        # Distance error in METRES (the "correct" thing he wrote in the
-        # Updated Rotational Motion commit, which didn't compile)
+        # Distance error in METRES
         dist_error = dist_m - TARGET_FOLLOW_DISTANCE_M
 
         # PID outputs
@@ -200,14 +194,13 @@ class Logic:
         lin_x = self._dist_pid.compute(dist_error, dt)
 
         # Velocity feed-forward — if the person is drifting right (+vel_x),
-        # add extra rotation. Same intent as Jason's Kalman vel FF.
+        # add extra rotation.
         vel_ff = self._last_target_vel_x * PAN_FF_GAIN
         vel_ff = max(-0.3, min(0.3, vel_ff))
         ang_z += vel_ff
 
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is the
-        # true hard ceiling. (Jason's Kotlin clamped PID output before adding
-        # FF, meaning the final command could exceed MAX_ANGULAR.)
+        # true hard ceiling.
         ang_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, ang_z))
         lin_x = max(-MAX_LINEAR,  min(MAX_LINEAR,  lin_x))
 
@@ -223,7 +216,6 @@ class Logic:
         self._fsm = next_state
         if next_state == SCAN_ROTATE:
             # Rotate toward direction the target was last moving
-            # (Jason's unmerged intent — moving right → CCW scan)
             self._scan_direction = 1.0 if self._last_target_vel_x >= 0 else -1.0
             self._start_manoeuvre(DEG_45_RAD, self._scan_direction)
         elif next_state == OBSTACLE_TURN:
@@ -257,7 +249,7 @@ class Logic:
         return {"cx_px": cx_px, "w_px": w_px}
 
     def _estimate_distance(self, obs):
-        """Pinhole distance model — Jason's estimateDistance()."""
+        """Pinhole distance model — estimateDistance()."""
         face_bounds = self._extract_face(obs)
         if face_bounds is None:
             return float("inf")
