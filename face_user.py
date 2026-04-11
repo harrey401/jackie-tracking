@@ -41,6 +41,14 @@ PAN_KI = 0.05
 PAN_KD = 0.03
 INTEGRAL_LIMIT = 0.4
 
+# Target horizontal position of the face in the frame (normalized 0..1).
+# 0.5 = exact center. Tune this if Jackie's camera mount is offset from
+# the body's rotational axis — Jackie's left eye vs right eye effect.
+#   - If the user ends up on Jackie's LEFT EYE SIDE  → raise this (0.55)
+#   - If the user ends up on Jackie's RIGHT EYE SIDE → lower this (0.45)
+# Think of it as "where in the camera image should I try to keep your face".
+TARGET_CX = 0.5
+
 # Deadzone — widens automatically for small (far) faces
 # 0.06 normalized = ~38 px on a 640-wide frame. Generous by design to
 # absorb detector jitter without Jackie reacting to it.
@@ -137,8 +145,10 @@ class Logic:
             0.0, 1.0 - w / REF_FACE_W
         )
 
-        # Pan error — continuous at deadzone edge
-        error = cx - 0.5
+        # Pan error — continuous at deadzone edge.
+        # TARGET_CX shifts the "zero error" point to compensate for camera
+        # mount offset (see TARGET_CX comment at top).
+        error = cx - TARGET_CX
         if abs(error) < deadzone:
             error_effective = 0.0
         else:
