@@ -21,15 +21,22 @@ from collections import deque
 FRAME_WIDTH_PX = 640
 
 # ─── Pan PID gains (same magnitudes as follow_mode.py) ─────────────────────
-PAN_KP = 0.0018
+PAN_KP = 0.0025
 PAN_KI = 0.0001
 PAN_KD = 0.001
 
 # ─── Velocity feed-forward (same name as follow_mode.py) ──────────────────
-PAN_FF_GAIN = 0.0012
+PAN_FF_GAIN = 0.0015
 
 # ─── Output clamp ──────────────────────────────────────────────────────────
-MAX_ANGULAR = 0.5
+MAX_ANGULAR = 0.6
+
+# ─── Chassis deadband compensation ────────────────────────────────────────
+# Jackie's chassis doesn't start rotating below ~0.15 rad/s. Any non-zero
+# command smaller than this vanishes into friction. Snap small-but-nonzero
+# outputs up to the minimum so tracking stays responsive near center.
+DEADBAND_PX = 20       # within ±20 px of center → don't bother rotating
+MIN_KICK = 0.18        # rad/s — floor when we DO want to rotate
 
 
 class _PID:
@@ -86,6 +93,12 @@ class Logic:
 
         # Pan PID on pixel error (same scale as follow_mode.py)
         dx = cx_px - frame_w / 2.0
+
+        # Deadband — if already basically centered, stop rotating cleanly
+        if abs(dx) < DEADBAND_PX:
+            self._pan_pid.reset()
+            return {"linear": 0.0, "angular": 0.0}
+
         ang_z = self._pan_pid.compute(dx, dt)
 
         # Velocity feed-forward — lead the moving target
@@ -96,6 +109,11 @@ class Logic:
         # Sign flip — Jackie's /cmd_vel_mux/input/navi_override expects
         # negative angular.z to rotate toward a user on the right of frame.
         ang_z = -ang_z
+
+        # Deadband kick — if we WANT to rotate but the command is too weak
+        # to overcome chassis friction, snap up to MIN_KICK with correct sign.
+        if 0 < abs(ang_z) < MIN_KICK:
+            ang_z = MIN_KICK if ang_z > 0 else -MIN_KICK
 
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is
         # the true hard ceiling.
