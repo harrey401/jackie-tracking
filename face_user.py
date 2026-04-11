@@ -49,11 +49,12 @@ INTEGRAL_LIMIT = 0.4
 # Think of it as "where in the camera image should I try to keep your face".
 TARGET_CX = 0.98
 
-# Deadzone — widens automatically for small (far) faces
-# 0.06 normalized = ~38 px on a 640-wide frame. Generous by design to
-# absorb detector jitter without Jackie reacting to it.
-BASE_DEADZONE = 0.06
-DEADZONE_SIZE_SCALE = 0.08
+# Deadzone — widens automatically for small (far) faces.
+# 0.04 normalized = ~26 px on a 640-wide frame. Narrowed from 0.06
+# now that v2 is confirmed stable (the wide deadzone was a safety
+# margin during the initial anti-shimmy tuning).
+BASE_DEADZONE = 0.04
+DEADZONE_SIZE_SCALE = 0.06
 
 # Input low-pass filter on raw face_cx (alpha = weight of HISTORY,
 # 1 - alpha = weight of new sample). 0.6 = strong filter.
