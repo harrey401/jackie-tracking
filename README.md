@@ -66,13 +66,6 @@ Every ~10 seconds the SMAIT server runs `git pull` on this repo. If a file chang
 
 **If you commit a syntax error**, the server catches the exception, logs it, and keeps running the **last good version**. You won't brick the robot. You'll see the error in the server log. Fix it, push again, Jackie recovers.
 
----
-
-## What you have to work with
-
-You get a face observation each tick and you return a velocity. Everything else — face detection, the camera feed, sending commands to the wheels — is already done for you. You don't need to touch any other code.
-
-If at some point you want a field in `obs` that isn't there yet (for example: distance in meters, multiple faces, the raw camera frame), tell Gow and he'll add it. The contract is meant to grow as the project needs it.
 
 ---
 
@@ -177,8 +170,6 @@ All the knobs live at the **top of each file** as UPPER_CASE constants. You don'
 ## Adding new behaviour
 
 You can add helper functions, track extra state on `self`, import `math` or `time` — normal Python. You cannot import modules that aren't in SMAIT's venv (numpy/scipy/etc are fine, random libs are not).
-
-If you need a new field in `obs` (e.g. the user's distance in meters, or the session state), ask Gow — that's on the server side.
 
 ---
 
