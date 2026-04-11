@@ -234,13 +234,20 @@ class Logic:
             self._start_manoeuvre(DEG_45_RAD, -1.0)
         # CLEAR_CHECK and FOLLOWING have no setup
 
+    """
+    This function begins the motion of Jackie given an angle in radians and a direction.
+    Starts a timer, then updates the duration of each action that Jackie does. 
+    """
     def _start_manoeuvre(self, angle_rad, direction):
         self._scan_direction = direction
         duration_s = angle_rad / TURN_SPEED_RAD_S
         self._manoeuvre_end_s = self._t_accum + duration_s
 
     # ── Helpers ───────────────────────────────────────────────────────────
-
+    """
+    Tries to pick up on a face in the current frame, returning its center x and width in pixels if found.
+    Returns None if otherwise.
+    """
     def _extract_face(self, obs):
         """Return dict with cx_px + w_px if face visible, else None."""
         if not obs.get("face_visible") or obs.get("face_cx") is None:
