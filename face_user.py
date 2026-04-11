@@ -32,27 +32,35 @@ from collections import deque
 # === TUNABLES ==================================================================
 
 # Core PID gains (applied to normalized pan error, range -0.5..+0.5)
-PAN_KP = 1.6
-PAN_KI = 0.3
-PAN_KD = 0.25
-INTEGRAL_LIMIT = 0.4  # anti-windup clamp (rad/s worth of integral)
+# D and I are deliberately tiny — both amplify face-detector jitter. Keep
+# them small unless you've verified the detector is clean enough to handle
+# higher values. P-dominant control with heavy input filtering is what
+# actually works against a 3-5 pixel jittering bbox.
+PAN_KP = 1.2
+PAN_KI = 0.05
+PAN_KD = 0.03
+INTEGRAL_LIMIT = 0.4
 
 # Deadzone — widens automatically for small (far) faces
-BASE_DEADZONE = 0.03
+# 0.06 normalized = ~38 px on a 640-wide frame. Generous by design to
+# absorb detector jitter without Jackie reacting to it.
+BASE_DEADZONE = 0.06
 DEADZONE_SIZE_SCALE = 0.08
 
-# Input low-pass filter on raw face_cx (0.0 = no filter, 1.0 = never update)
-INPUT_EMA_ALPHA = 0.35
+# Input low-pass filter on raw face_cx (alpha = weight of HISTORY,
+# 1 - alpha = weight of new sample). 0.6 = strong filter.
+INPUT_EMA_ALPHA = 0.6
 
-# Velocity feed-forward
-VELOCITY_FF_GAIN = 0.6
+# Velocity feed-forward — mostly off. Re-enable when the detector is
+# clean enough to trust its velocity estimate.
+VELOCITY_FF_GAIN = 0.1
 VELOCITY_WINDOW = 5
 
 # Size-adaptive gain: scale by clamp(face_w_norm / REF_FACE_W, 0.4, 1.0)
 REF_FACE_W = 0.18
 
 # Output slew rate limit (max angular acceleration)
-MAX_ANGULAR_ACCEL = 3.0  # rad/s²
+MAX_ANGULAR_ACCEL = 2.0  # rad/s²
 
 # Hard speed ceiling (server also clamps)
 MAX_ANGULAR = 0.8
