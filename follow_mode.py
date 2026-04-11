@@ -80,6 +80,7 @@ class _PID:
         self.kd = kd
         self._integral = 0.0
         self._prev_error = 0.0
+        
 
     def compute(self, error, dt):
         self._integral += error * dt
@@ -101,6 +102,7 @@ class Logic:
         self._cx_history = deque(maxlen=5)     # (t_accum, cx_px) for velocity
         self._smooth_dist = None
         self.reset()
+        self._collision_frame_count = 0
 
     def reset(self):
         """Called when Follow Me is turned on."""
@@ -121,6 +123,7 @@ class Logic:
         
         self.locked_track_id = None  # if set, only follow this track ID (for multi-person scenarios)
         self._smooth_dist = None
+        self._collision_frame_count = 0
 
     # ── Main tick ──────────────────────────────────────────────────────
 
@@ -220,6 +223,11 @@ class Logic:
 
         # Safety: stop linear motion when very close
         if dist_m < COLLISION_DISTANCE_M + 0.025:
+            self._collision_frame_count += 1
+        else:
+            self._collision_frame_count = 0
+            
+        if self._collision_frame_count >= 3:  # ~0.5s of collision proximity
             lin_x = 0.0
 
         return self._out(lin_x, ang_z)
