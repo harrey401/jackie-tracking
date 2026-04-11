@@ -1,17 +1,42 @@
 # Jackie Tracking Logic
 
-This repository contains the logic that controls how **Jackie** (the service robot) tracks people. Two behaviours live here:
+This repository is the **playground** for two tracking skills on **Jackie** (the SJSU lab service robot). Both run server-side. You edit the Python here, push to GitHub, and the running robot picks up the change in ~10 seconds — no SSH, no restart, no access to the rest of the SMAIT codebase.
 
-| File | What it does | When it runs |
-|------|--------------|--------------|
-| `face_user.py` | Rotates Jackie to face the user while Jackie is speaking. No forward movement. | Automatically starts on every TTS response in the ENG192 Lab app |
-| `follow_mode.py` | Drives Jackie toward a person and faces them. Full mobility. | When the "Follow Me" button is pressed |
-
-Both files are **hot-reloaded** on the server. You edit them, save (commit + push to GitHub), and the running robot picks up the change within ~10 seconds — no restart.
+| File | Skill | What it should do |
+|------|-------|-------------------|
+| `face_user.py` | **Face the User** | Jackie rotates to keep the user centered. Rotation only — no driving. |
+| `follow_mode.py` | **Follow Me** | Jackie drives toward the user and faces them. Full mobility. |
 
 ---
 
-## How it works
+## How you trigger them
+
+Neither skill auto-fires. They're activated **explicitly** from a test page in the ENG192 Lab app on Jackie's touchscreen:
+
+```
+   Jackie touchscreen          Server                 This repo
+   ┌────────────────┐          ┌──────────┐          ┌──────────────┐
+   │ Tracking Tests │          │  SMAIT   │          │  GitHub      │
+   │                │          │          │          │              │
+   │ [Face the User]│ ──START─►│ runs the │ ◄──pull──│ face_user.py │
+   │     [STOP]     │          │ logic    │   ~10s   │ follow_mode  │
+   │                │          │ from     │          │              │
+   │  [Follow Me]   │ ──START─►│ this     │          │              │
+   │     [STOP]     │          │ repo     │          │              │
+   └────────────────┘          └──────────┘          └──────────────┘
+```
+
+1. Open the lab app on Jackie → tap **Tracking Tests**.
+2. The page has two cards: *Face the User* and *Follow Me*. Each has a START/STOP button.
+3. Tap START → the server starts calling your `Logic.step()` ~10 times per second and sending the resulting velocity to the chassis.
+4. Tap STOP → the server stops the loop and zeroes the chassis.
+5. Only one skill runs at a time. Starting one stops the other.
+
+That's the only way they activate. They will not run during normal Ask-Jackie conversation.
+
+---
+
+## How edits propagate
 
 ```
  ┌─────────────────┐       ┌──────────────────┐       ┌─────────────────┐
@@ -33,9 +58,31 @@ Both files are **hot-reloaded** on the server. You edit them, save (commit + pus
                                                       └─────────────────┘
 ```
 
-Every ~10 seconds the server runs `git pull` on this repo. If a file changed, the server calls `importlib.reload()` on it. The next time Jackie needs a velocity command (about 10 times per second), it uses your new code.
+Every ~10 seconds the SMAIT server runs `git pull` on this repo. If a file changed, the server calls `importlib.reload()` on it. The next time Jackie needs a velocity command (~10 Hz), it uses your new code.
 
 **If you commit a syntax error**, the server catches the exception, logs it, and keeps running the **last good version**. You won't brick the robot. You'll see the error in the server log. Fix it, push again, Jackie recovers.
+
+---
+
+## What lives in this repo vs in the SMAIT server
+
+You don't need access to the rest of the SMAIT codebase. You should be able to do **everything you need** in just these two files. Here's the boundary so it's not a mystery:
+
+**Lives in this repo (yours to edit):**
+- The `Logic` class — `reset()` and `step(obs) -> {linear, angular}`.
+- All tunable constants (gains, deadzones, smoothing, max speeds).
+- Any helper functions you want to add.
+- Any per-skill state you keep on `self`.
+
+**Lives in the SMAIT server (Gow's code, you don't touch):**
+- The face perception pipeline that produces `face_visible`, `face_cx`, `face_area`, etc.
+- The control loop that calls your `step()` ~10 times per second.
+- The chassis driver that takes your `linear`/`angular` and turns it into wheel commands.
+- The Tracking Tests page in the Android app and the WebSocket messages it sends.
+- The hot-reload + git-pull machinery.
+- Hard safety caps (`|linear| ≤ 0.25 m/s`, `|angular| ≤ 1.5 rad/s`) applied AFTER your `step()`.
+
+**If you need something that isn't in `obs`** — for example, raw camera frames, the user's distance in meters, multiple faces, IMU data, anything — that's a server change. Ask Gow. He'll add the field to `obs` and you'll see it on the next reload. Don't try to import SMAIT modules from your file — they're not in your import path on purpose.
 
 ---
 
@@ -159,19 +206,35 @@ git push
 
 ---
 
-## Checking it worked
+## Test loop, end to end
 
-The server log prints a line every time it reloads a file:
+1. Edit `face_user.py` (or `follow_mode.py`) on github.com in a browser. Commit.
+2. Wait ~10 seconds. The server pulls and reloads. It logs one of:
+   ```
+   [tracking] face_user.py reloaded OK
+   [tracking] face_user.py RELOAD FAILED: SyntaxError at line 42 — keeping previous version
+   ```
+3. On Jackie's touchscreen: **Tracking Tests → Face the User → START**.
+4. Move around, see what Jackie does.
+5. Tap **STOP**. Jackie zeroes its wheels.
+6. Back to step 1.
 
-```
-[tracking] face_user.py reloaded OK
-[tracking] follow_mode.py reloaded OK
-```
+You can iterate as fast as you can commit. The server never restarts.
 
-Or if you broke it:
+**Heads up:** if you tap START while the *other* skill is running, the server stops the other one first. You can't have both running at the same time — they both want the chassis.
 
-```
-[tracking] face_user.py RELOAD FAILED: SyntaxError at line 42 — keeping previous version
-```
+---
 
-Ask Gow for the server log URL if you want to watch it live.
+## Things you can NOT do from this file (and what to ask Gow for)
+
+| You want to… | Why you can't | Ask Gow for |
+|---|---|---|
+| Read the raw camera frame | Not exposed in `obs` | Add `frame_jpeg` to `obs` |
+| Get distance in meters | Only `face_area` (px²) is given | Calibrated depth via face width or stereo |
+| React to multiple faces at once | Only the locked target track is given | List of all visible faces in `obs` |
+| Run faster than 10 Hz | Loop interval is fixed in the controller | Bump control rate or expose it |
+| Use IMU / lidar / map data | Not exposed | Add the field to `obs` |
+| Talk to the chassis directly (e.g. send a `/poi` goal) | This file only returns `linear`/`angular` | Use the existing nav system, not tracking |
+| Read or write files | The loader runs `step()` in-process — side effects are bad | Don't. Tell Gow what you actually need. |
+
+When in doubt: **return values from `step()`, don't reach outside the function.**
