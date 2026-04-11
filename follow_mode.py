@@ -42,7 +42,7 @@ COLLISION_PAUSE_S = 3.0
 
 # ─── PID gains ──────────────────────────────────────────
 PAN_KP  = 0.003
-PAN_KI  = 0.0001
+PAN_KI  = 0.0005
 PAN_KD  = 0.001
 
 # DIST_KP retuned for metre-based distance error
@@ -55,7 +55,7 @@ DIST_KI = 0.0
 DIST_KD = 0.15
 
 # ─── Feed-forward ───────────────────────────
-PAN_FF_GAIN = 0.002               # applied to face_cx velocity (px/s)
+PAN_FF_GAIN = 0.001               # applied to face_cx velocity (px/s)
 
 # ─── Output clamps ────────────────────────
 MAX_ANGULAR = 0.8
@@ -119,7 +119,7 @@ class Logic:
 
     # ── Main tick ──────────────────────────────────────────────────────
 
-    def step(self, obs):
+    def step(self, obs):  # sourcery skip: extract-duplicate-method
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
 
@@ -203,6 +203,8 @@ class Logic:
         # negative angular.z to rotate toward a user on the right of frame.
         ang_z = -ang_z
         
+        # Sign flip for linear_x — positive PID means "too far, speed up forward", 
+        # but Jackie's cmd_vel_mux expects positive linear.x to move forward.
         lin_x = -lin_x
 
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is the
@@ -211,7 +213,7 @@ class Logic:
         lin_x = max(-MAX_LINEAR,  min(MAX_LINEAR,  lin_x))
 
         # Safety: stop linear motion when very close
-        if dist_m < COLLISION_DISTANCE_M + 0.05:
+        if dist_m < COLLISION_DISTANCE_M + 0.025:
             lin_x = 0.0
 
         return self._out(lin_x, ang_z)
