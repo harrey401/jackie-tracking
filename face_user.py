@@ -47,7 +47,7 @@ INTEGRAL_LIMIT = 0.4
 #   - If the user ends up on Jackie's LEFT EYE SIDE  → raise this (0.55)
 #   - If the user ends up on Jackie's RIGHT EYE SIDE → lower this (0.45)
 # Think of it as "where in the camera image should I try to keep your face".
-TARGET_CX = 0.3
+TARGET_CX = 0.98
 
 # Deadzone — widens automatically for small (far) faces
 # 0.06 normalized = ~38 px on a 640-wide frame. Generous by design to
