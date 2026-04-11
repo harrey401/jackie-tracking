@@ -50,9 +50,7 @@ INTEGRAL_LIMIT = 0.4
 TARGET_CX = 0.98
 
 # Deadzone — widens automatically for small (far) faces.
-# 0.04 normalized = ~26 px on a 640-wide frame. Narrowed from 0.06
-# now that v2 is confirmed stable (the wide deadzone was a safety
-# margin during the initial anti-shimmy tuning).
+# 0.04 normalized = ~26 px on a 640-wide frame. 
 BASE_DEADZONE = 0.04
 DEADZONE_SIZE_SCALE = 0.06
 
