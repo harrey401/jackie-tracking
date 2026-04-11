@@ -50,9 +50,13 @@ INTEGRAL_LIMIT = 0.4
 TARGET_CX = 0.98
 
 # Deadzone — widens automatically for small (far) faces.
-# 0.04 normalized = ~26 px on a 640-wide frame. 
-BASE_DEADZONE = 0.04
-DEADZONE_SIZE_SCALE = 0.06
+# 0.06 normalized = ~38 px on a 640-wide frame. Wider than strictly
+# needed for steady-state, but necessary to absorb the lag between the
+# real face position and the EMA-filtered signal during motion starts.
+# Tightening this to 0.04 causes jitter in the first couple of seconds
+# after you start moving (filter lag crosses the boundary repeatedly).
+BASE_DEADZONE = 0.06
+DEADZONE_SIZE_SCALE = 0.08
 
 # Input low-pass filter on raw face_cx (alpha = weight of HISTORY,
 # 1 - alpha = weight of new sample). 0.6 = strong filter.
