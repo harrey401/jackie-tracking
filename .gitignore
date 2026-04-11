@@ -1,6 +1,4 @@
 __pycache__/
 
-# Private v2 reference implementations (Gow-only, not shared with collaborators)
-face_user_v2.py
-follow_mode_v2.py
+# Private upgrade notes (kept local — not shared with collaborators)
 UPGRADES.md
