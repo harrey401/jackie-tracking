@@ -75,47 +75,18 @@ class Logic:
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
 
-        # No face → stop rotating. No scanning.
-        if not obs.get("face_visible") or obs.get("face_cx") is None:
-            return {"linear": 0.0, "angular": 0.0}
+        log_now = int(self._t_accum * 2) != int((self._t_accum - dt) * 2)
+        face_visible = bool(obs.get("face_visible")) and obs.get("face_cx") is not None
 
-        frame_w = obs.get("frame_width_px") or FRAME_WIDTH_PX
-        cx_px = obs["face_cx"] * frame_w
+        if log_now:
+            print(
+                f"[face_user DIAG] visible={face_visible} "
+                f"cx={obs.get('face_cx')} dt={dt:.3f}",
+                flush=True,
+            )
 
-        # Update velocity history for feed-forward
-        self._cx_history.append((self._t_accum, cx_px))
-        if len(self._cx_history) >= 2:
-            t0, c0 = self._cx_history[0]
-            t1, c1 = self._cx_history[-1]
-            if t1 - t0 > 1e-3:
-                self._last_target_vel_x = (c1 - c0) / (t1 - t0)
-
-        # Pan PID on pixel error (same scale as follow_mode.py)
-        dx = cx_px - frame_w / 2.0
-
-        # Deadband — if already basically centered, stop rotating cleanly
-        if abs(dx) < DEADBAND_PX:
-            self._pan_pid.reset()
-            return {"linear": 0.0, "angular": 0.0}
-
-        ang_z = self._pan_pid.compute(dx, dt)
-
-        # Velocity feed-forward — lead the moving target
-        vel_ff = self._last_target_vel_x * PAN_FF_GAIN
-        vel_ff = max(-0.3, min(0.3, vel_ff))
-        ang_z += vel_ff
-
-        # Sign flip — Jackie's /cmd_vel_mux/input/navi_override expects
-        # negative angular.z to rotate toward a user on the right of frame.
-        ang_z = -ang_z
-
-        # Deadband kick — if we WANT to rotate but the command is too weak
-        # to overcome chassis friction, snap up to MIN_KICK with correct sign.
-        if 0 < abs(ang_z) < MIN_KICK:
-            ang_z = MIN_KICK if ang_z > 0 else -MIN_KICK
-
-        # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is
-        # the true hard ceiling.
-        ang_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, ang_z))
-
-        return {"linear": 0.0, "angular": ang_z}
+        # DIAGNOSTIC: if face visible → force -0.3 (tests neg chassis cmd)
+        #             if no face    → zero
+        if face_visible:
+            return {"linear": 0.0, "angular": -0.3}
+        return {"linear": 0.0, "angular": 0.0}
