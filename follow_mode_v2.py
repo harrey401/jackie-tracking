@@ -82,7 +82,7 @@ LOST_DECAY_S    = 0.8
 # === LOGIC ======================================================================
 
 from collections import deque
-
+import math
 
 class Logic:
     def __init__(self):
@@ -104,6 +104,9 @@ class Logic:
         self._at_target = False  # hysteresis flag on distance
         self._t_accum = 0.0
 
+    """
+    The step() function 
+    """
     def step(self, obs):
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
@@ -117,7 +120,6 @@ class Logic:
         face_w_norm = obs.get("face_w_norm")
         if face_w_norm is None and face_area:
             # Rough: assume 320-wide frame. Good enough; filtered heavily below.
-            import math
             w_px = math.sqrt(max(face_area, 1) / 1.3)
             face_w_norm = w_px / 320.0
 
@@ -204,12 +206,8 @@ class Logic:
         # --- Distance PID with hysteresis ---
         dist_err = distance_m - TARGET_DISTANCE_M
 
-        if self._at_target:
-            # stay stopped until we've drifted far from target
-            if abs(dist_err) > STOP_HYSTERESIS_M:
-                self._at_target = False
-
-        if self._at_target:
+        if self._at_target and abs(dist_err) > STOP_HYSTERESIS_M:
+            self._at_target = False
             target_linear = 0.0
             self._dist_i *= 0.95  # bleed integral while parked
         else:

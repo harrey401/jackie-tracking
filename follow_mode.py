@@ -118,7 +118,9 @@ class Logic:
         self._prev_angular = 0.0
 
     # ── Main tick ──────────────────────────────────────────────────────
-
+    """
+    The step() function 
+    """
     def step(self, obs):  # sourcery skip: extract-duplicate-method
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
