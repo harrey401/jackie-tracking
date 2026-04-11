@@ -257,6 +257,11 @@ class Logic:
         if not obs.get("face_visible") or obs.get("face_cx") is None:
             return None
         frame_w = obs.get("frame_width_px") or FRAME_WIDTH_PX
+        
+        track_id = obs.get("track_id")
+        # If we're locked onto a specific person, reject other IDs
+        if self._locked_track_id is not None and track_id != self._locked_track_id:
+            return None   # different person — ignore
 
         # Prefer the server-provided pixel width; fall back to area-derived.
         w_px = obs.get("face_w_px")
