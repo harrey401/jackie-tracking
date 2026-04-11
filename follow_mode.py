@@ -108,8 +108,7 @@ class Logic:
         self._dist_pid.reset()
         self._cx_history.clear()
         self._t_accum = 0.0
-        self._smooth_dist = None
-
+        
         # FSM state — start in SCAN_ROTATE like the Kotlin version
         self._fsm = SCAN_ROTATE
         self._manoeuvre_end_s = 0.0     # when current scan/turn/stop expires
@@ -119,6 +118,9 @@ class Logic:
 
         self._prev_linear = 0.0
         self._prev_angular = 0.0
+        
+        self.locked_track_id = None  # if set, only follow this track ID (for multi-person scenarios)
+        self._smooth_dist = None
 
     # ── Main tick ──────────────────────────────────────────────────────
 
@@ -227,6 +229,7 @@ class Logic:
     def _enter_state(self, next_state):
         self._fsm = next_state
         if next_state == SCAN_ROTATE:
+            self.locked_track_id = None # find someone else near it next
             # Rotate toward direction the target was last moving
             self._scan_direction = 1.0 if self._last_target_vel_x >= 0 else -1.0
             self._start_manoeuvre(DEG_45_RAD, self._scan_direction)
