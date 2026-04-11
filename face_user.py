@@ -1,77 +1,100 @@
-"""Face-the-user tracking logic — rotation only, no forward motion.
+"""Face the User — rotation-only face tracking (server-side Python).
 
-This file controls how Jackie orients toward the user while it is speaking.
-Edit freely. The server hot-reloads this file every time you save it.
+Matches the conventions of follow_mode.py so switching between files
+feels natural: same `_PID` class, same gain names (`PAN_KP/KI/KD`,
+`PAN_FF_GAIN`), same pixel-space error, same frame geometry, same
+`Logic.reset() / Logic.step(obs)` contract.
 
-Contract:
-    Logic.reset()         — called once when tracking activates (TTS starts)
-    Logic.step(obs) -> act — called ~10 times per second
+The difference from follow_mode.py:
+  - rotation only — linear is always 0, no driving, no distance PID
+  - no FSM — there's only one behaviour: face the user
+  - no scan when face is lost — just stop rotating (intentional: this
+    skill shouldn't spin looking for people)
 
-`obs` is what the server sees right now:
-    face_visible : bool            True if a face was seen in the last 1s
-    face_cx      : float or None   Face center X, 0.0=left, 0.5=center, 1.0=right
-    face_cy      : float or None   Face center Y, 0.0=top, 1.0=bottom
-    face_w_norm  : float or None   Face width as fraction of frame (0..1)
-    face_age_s   : float           Seconds since last face seen (inf if never)
-    dt           : float           Seconds since last step (usually ~0.1)
-
-`act` is what you want Jackie to do:
-    linear  : float   m/s forward (KEEP 0 for face-the-user, we don't drive)
-    angular : float   rad/s rotation. Positive = turn LEFT. Negative = turn RIGHT.
-
-Safety caps enforced by the server AFTER your step():
-    |linear|  <= 0.25 m/s
-    |angular| <= 1.50 rad/s
-You can return anything, it will be clamped.
+Contract: Logic.reset() / Logic.step(obs) -> {linear, angular}.
 """
 
-# === TUNABLES — change these freely ============================================
-
-PAN_KP       = 1.5    # proportional gain on horizontal error
-DEADZONE     = 0.05   # ignore errors smaller than this (face close to center)
-MAX_ANGULAR  = 0.6    # rad/s cap — gentle for rotation-only
-SMOOTHING    = 0.3    # 0.0 = no smoothing, 1.0 = very smooth (slow to react)
-LOST_HOLD_S  = 0.5    # keep last command for this long after face disappears
-                      # then stop. Set higher to make Jackie hold its pose longer.
+from collections import deque
 
 
-# === LOGIC ======================================================================
+# ─── Camera geometry (match follow_mode.py) ────────────────────────────────
+FRAME_WIDTH_PX = 640
+
+# ─── Pan PID gains (same magnitudes as follow_mode.py) ─────────────────────
+PAN_KP = 0.003
+PAN_KI = 0.0001
+PAN_KD = 0.001
+
+# ─── Velocity feed-forward (same name as follow_mode.py) ──────────────────
+PAN_FF_GAIN = 0.002
+
+# ─── Output clamp ──────────────────────────────────────────────────────────
+MAX_ANGULAR = 0.8
+
+
+class _PID:
+    """Same PID as in follow_mode.py. Ported from Jason's PidController.kt."""
+    def __init__(self, kp, ki, kd):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self._integral = 0.0
+        self._prev_error = 0.0
+
+    def compute(self, error, dt):
+        self._integral += error * dt
+        deriv = (error - self._prev_error) / max(dt, 1e-6)
+        self._prev_error = error
+        return self.kp * error + self.ki * self._integral + self.kd * deriv
+
+    def reset(self):
+        self._integral = 0.0
+        self._prev_error = 0.0
+
 
 class Logic:
     def __init__(self):
+        self._pan_pid = _PID(PAN_KP, PAN_KI, PAN_KD)
+        self._cx_history = deque(maxlen=5)      # (t_accum, cx_px) for velocity FF
         self.reset()
 
     def reset(self):
-        """Called when tracking turns on. Clear any memory between sessions."""
-        self._prev_angular = 0.0
-        self._last_known_angular = 0.0
+        """Called when Face-the-User is turned on."""
+        self._pan_pid.reset()
+        self._cx_history.clear()
+        self._t_accum = 0.0
+        self._last_target_vel_x = 0.0
 
     def step(self, obs):
-        """Decide what velocity to send. Return {'linear': ..., 'angular': ...}."""
+        dt = max(obs["dt"], 1e-3)
+        self._t_accum += dt
 
-        # --- No face right now ---
-        if not obs["face_visible"] or obs["face_cx"] is None:
-            # If we saw one very recently, keep holding the last command briefly.
-            if obs["face_age_s"] < LOST_HOLD_S:
-                return {"linear": 0.0, "angular": self._last_known_angular}
-            # Otherwise stop rotating. Do NOT spin to search.
-            self._prev_angular = 0.0
+        # No face → stop rotating. No scanning.
+        if not obs.get("face_visible") or obs.get("face_cx") is None:
             return {"linear": 0.0, "angular": 0.0}
 
-        # --- Face visible: center it ---
-        error = obs["face_cx"] - 0.5  # + = face is right of center
+        frame_w = obs.get("frame_width_px") or FRAME_WIDTH_PX
+        cx_px = obs["face_cx"] * frame_w
 
-        # Deadzone: don't fidget when face is already centered
-        if abs(error) < DEADZONE:
-            target_angular = 0.0
-        else:
-            # Proportional control. Negative sign: face right → turn right (neg angular).
-            target_angular = -PAN_KP * error
-            target_angular = max(-MAX_ANGULAR, min(MAX_ANGULAR, target_angular))
+        # Update velocity history for feed-forward
+        self._cx_history.append((self._t_accum, cx_px))
+        if len(self._cx_history) >= 2:
+            t0, c0 = self._cx_history[0]
+            t1, c1 = self._cx_history[-1]
+            if t1 - t0 > 1e-3:
+                self._last_target_vel_x = (c1 - c0) / (t1 - t0)
 
-        # Exponential smoothing to avoid jerky motion
-        angular = (1.0 - SMOOTHING) * target_angular + SMOOTHING * self._prev_angular
-        self._prev_angular = angular
-        self._last_known_angular = angular
+        # Pan PID on pixel error (same scale as follow_mode.py)
+        dx = cx_px - frame_w / 2.0
+        ang_z = self._pan_pid.compute(dx, dt)
 
-        return {"linear": 0.0, "angular": angular}
+        # Velocity feed-forward — lead the moving target
+        vel_ff = self._last_target_vel_x * PAN_FF_GAIN
+        vel_ff = max(-0.3, min(0.3, vel_ff))
+        ang_z += vel_ff
+
+        # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is
+        # the true hard ceiling.
+        ang_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, ang_z))
+
+        return {"linear": 0.0, "angular": ang_z}

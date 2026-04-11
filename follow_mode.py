@@ -50,9 +50,14 @@ PAN_KP  = 0.003
 PAN_KI  = 0.0001
 PAN_KD  = 0.001
 
-DIST_KP = 0.0003
+# DIST_KP retuned for metre-based distance error. Jason's original 0.0003
+# was calibrated against pixel² area error (magnitudes in the thousands);
+# now that we control on meters (magnitudes ~0..1.5), the gain must be ~1000×
+# larger to produce sensible linear speed. Rough sizing: at max error 1.2m
+# we want ~0.3 m/s forward, so kp ≈ 0.25.
+DIST_KP = 0.25
 DIST_KI = 0.0
-DIST_KD = 0.0005
+DIST_KD = 0.15
 
 # ─── Feed-forward (from Jason's unmerged update) ───────────────────────────
 PAN_FF_GAIN = 0.002               # applied to face_cx velocity (px/s)
@@ -194,15 +199,17 @@ class Logic:
         ang_z = self._pan_pid.compute(dx, dt)
         lin_x = self._dist_pid.compute(dist_error, dt)
 
-        # Clamp to Jason's coerceIn ranges
-        ang_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, ang_z))
-        lin_x = max(-MAX_LINEAR,  min(MAX_LINEAR,  lin_x))
-
         # Velocity feed-forward — if the person is drifting right (+vel_x),
-        # add extra CW rotation. Same intent as Jason's vel FF.
+        # add extra rotation. Same intent as Jason's Kalman vel FF.
         vel_ff = self._last_target_vel_x * PAN_FF_GAIN
         vel_ff = max(-0.3, min(0.3, vel_ff))
         ang_z += vel_ff
+
+        # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is the
+        # true hard ceiling. (Jason's Kotlin clamped PID output before adding
+        # FF, meaning the final command could exceed MAX_ANGULAR.)
+        ang_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, ang_z))
+        lin_x = max(-MAX_LINEAR,  min(MAX_LINEAR,  lin_x))
 
         # Safety: stop linear motion when very close
         if dist_m < COLLISION_DISTANCE_M + 0.05:
