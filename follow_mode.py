@@ -26,6 +26,7 @@ from collections import deque
 FOLLOW_DISTANCE_M        = 3.0    # max distance at which we try to follow
 TARGET_FOLLOW_DISTANCE_M = 0.5    # desired stopping distance
 COLLISION_DISTANCE_M     = 0.33   # "emergency close"
+DIST_EMA_ALPHA = 0.3  # tune: lower = smoother but more lag - exponential moving average
 
 # ─── Camera geometry ───────────────────────────────────────────────────────
 FRAME_WIDTH_PX  = 640             # assumed frame width 
@@ -98,6 +99,7 @@ class Logic:
         self._pan_pid = _PID(PAN_KP, PAN_KI, PAN_KD)
         self._dist_pid = _PID(DIST_KP, DIST_KI, DIST_KD)
         self._cx_history = deque(maxlen=5)     # (t_accum, cx_px) for velocity
+        self._smooth_dist = None
         self.reset()
 
     def reset(self):
@@ -106,6 +108,7 @@ class Logic:
         self._dist_pid.reset()
         self._cx_history.clear()
         self._t_accum = 0.0
+        self._smooth_dist = None
 
         # FSM state — start in SCAN_ROTATE like the Kotlin version
         self._fsm = SCAN_ROTATE
@@ -205,7 +208,8 @@ class Logic:
         
         # Sign flip for linear_x — positive PID means "too far, speed up forward", 
         # but Jackie's cmd_vel_mux expects positive linear.x to move forward.
-        lin_x = -lin_x
+        # lin_x = -lin_x
+        
 
         # Final clamp — applied AFTER the feed-forward so MAX_ANGULAR is the
         # true hard ceiling.
@@ -269,7 +273,19 @@ class Logic:
         if face_bounds is None:
             return float("inf")
         w_px = face_bounds["w_px"]
-        return float("inf") if w_px <= 0 else (FACE_WIDTH_M * FOCAL_LENGTH_PX) / w_px
+        if w_px <= 0:
+            return float("inf")
+        
+        raw_dist = (FACE_WIDTH_M * FOCAL_LENGTH_PX) / w_px
+
+        # Seed on first valid reading; blend on subsequent ones
+        if self._smooth_dist is None:
+            self._smooth_dist = raw_dist
+        else:
+             self._smooth_dist = 0.3 * raw_dist + 0.7 * self._smooth_dist  # EMA
+
+        return self._smooth_dist
+        
 
     def _out(self, linear, angular):
         self._prev_linear = linear
