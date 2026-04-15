@@ -46,6 +46,10 @@ PAN_KP  = 0.003
 PAN_KI  = 0.0005
 PAN_KD  = 0.001
 
+# Add integral clamping to PID
+INTEGRAL_MAX_PAN  = 200.0   # tune: prevents windup on pan
+INTEGRAL_MAX_DIST = 50.0    # tune: prevents windup on distance
+
 # DIST_KP retuned for metre-based distance error
 # was calibrated against pixel² area error (magnitudes in the thousands);
 # now that we control on meters (magnitudes ~0..1.5), the gain must be ~1000×
@@ -82,8 +86,10 @@ class _PID:
         self._prev_error = 0.0
         
 
-    def compute(self, error, dt):
+    def compute(self, error, dt, integral_max=None):
         self._integral += error * dt
+        if integral_max is not None:
+            self._integral = max(-integral_max, min(integral_max, self._integral))
         deriv = (error - self._prev_error) / max(dt, 1e-6)
         self._prev_error = error
         return self.kp * error + self.ki * self._integral + self.kd * deriv
@@ -198,8 +204,8 @@ class Logic:
         dist_error = dist_m - TARGET_FOLLOW_DISTANCE_M
 
         # PID outputs
-        ang_z = self._pan_pid.compute(dx, dt)
-        lin_x = self._dist_pid.compute(dist_error, dt)
+        ang_z = self._pan_pid.compute(dx, dt, integral_max=INTEGRAL_MAX_PAN)
+        lin_x = self._dist_pid.compute(dist_error, dt, integral_max=INTEGRAL_MAX_DIST)
 
         # Velocity feed-forward — if the person is drifting right (+vel_x),
         # add extra rotation.
@@ -236,6 +242,9 @@ class Logic:
 
     def _enter_state(self, next_state):
         self._fsm = next_state
+        if next_state == FOLLOWING:
+            self._pan_pid.reset()
+            self._dist_pid.reset()
         if next_state == SCAN_ROTATE:
             self.locked_track_id = None # find someone else near it next
             # Rotate toward direction the target was last moving
