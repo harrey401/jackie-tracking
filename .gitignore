@@ -2,4 +2,3 @@ __pycache__/
 
 # Private upgrade notes (kept local — not shared with collaborators)
 UPGRADES.md
-.vscode/settings.json
