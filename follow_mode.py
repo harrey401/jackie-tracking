@@ -20,6 +20,12 @@ Contract: Logic.reset() / Logic.step(obs) -> {linear, angular}.
 
 import math
 from collections import deque
+import threading
+import roslibpy
+
+ROSBRIDGE_HOST = "jackie.local"  # or Jackie's IP address
+ROSBRIDGE_PORT = 9090
+LIDAR_TOPIC    = "/scan"         # confirm with `rostopic list` on Jackie
 
 
 # ─── Thresholds (metres) ───────────────────────────────────────────────────
@@ -44,7 +50,7 @@ COLLISION_PAUSE_S = 3.0
 # ─── PID gains ──────────────────────────────────────────
 PAN_KP  = 0.003
 PAN_KI  = 0.0005
-PAN_KD  = 0.001
+PAN_KD  = 0.0005
 
 # Add integral clamping to PID
 INTEGRAL_MAX_PAN  = 200.0   # tune: prevents windup on pan
@@ -90,26 +96,62 @@ class _PID:
         self._integral += error * dt
         if integral_max is not None:
             self._integral = max(-integral_max, min(integral_max, self._integral))
-        deriv = (error - self._prev_error) / max(dt, 1e-6)
+        deriv = -(error - self._prev_error) / max(dt, 1e-6) # Change derivative sign on measurement of error
         self._prev_error = error
         return self.kp * error + self.ki * self._integral + self.kd * deriv
 
     def reset(self):
         self._integral = 0.0
         self._prev_error = 0.0
+        self._collision_frame_count = 0
 
 
 class Logic:
     """Server-side Python port of on-device FollowController."""
 
     def __init__(self):
+        self._proximity_m = float("inf")
+        self._ros_lock = threading.Lock()
+        self._start_lidar_subscriber()
+        self._collision_frame_count = 0
         self._pan_pid = _PID(PAN_KP, PAN_KI, PAN_KD)
         self._dist_pid = _PID(DIST_KP, DIST_KI, DIST_KD)
         self._cx_history = deque(maxlen=5)     # (t_accum, cx_px) for velocity
         self._smooth_dist = None
         self.reset()
-        self._collision_frame_count = 0
+        
 
+    # Get info on rosbridge to communicate to Jackie's ROS. 
+    def _get_proximity(self):
+        with self._ros_lock:
+            return self._proximity_m
+    
+        def _start_lidar_subscriber(self):
+            def _run():
+                try:
+                    client = roslibpy.Ros(host=ROSBRIDGE_HOST, port=ROSBRIDGE_PORT)
+                    client.run()
+                    topic = roslibpy.Topic(client, LIDAR_TOPIC, "sensor_msgs/LaserScan")
+
+                    def _on_scan(msg):
+                        ranges = msg.get("ranges", [])
+                        if ranges:
+                            # Center ray = straight ahead; filter out inf/nan
+                            mid = len(ranges) // 2
+                            sample = [r for r in ranges[mid-3:mid+3]
+                                    if r == r and r < 30.0]  # nan-safe, cap at 30m
+                            if sample:
+                                with self._ros_lock:
+                                    self._proximity_m = min(sample)
+
+                    topic.subscribe(_on_scan)
+                    client.spin_forever()  # blocks this thread
+                except Exception as e:
+                    print(f"[LiDAR] rosbridge connection failed: {e}")
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+    
     def reset(self):
         """Called when Follow Me is turned on."""
         self._pan_pid.reset()
@@ -134,11 +176,24 @@ class Logic:
     # ── Main tick ──────────────────────────────────────────────────────
 
     def step(self, obs):  # sourcery skip: extract-duplicate-method
+        # Get lidar reading and add to obs for use in FSM
+        obs["proximity_m"] = self._get_proximity()
+        
         dt = max(obs["dt"], 1e-3)
         self._t_accum += dt
 
         face_bounds = self._extract_face(obs)
         dist_m = self._estimate_distance(obs) if face_bounds else float("inf")
+
+        proximity_m = obs.get("proximity_m")
+
+        if proximity_m is not None:
+            if proximity_m < COLLISION_DISTANCE_M:
+                self._enter_state(COLLISION_STOP)
+                return self._out(0.0, 0.0)
+            elif proximity_m < FOLLOW_DISTANCE_M * 0.5:
+                self._enter_state(OBSTACLE_TURN)
+                return self._out(0.0, 0.0)
 
         # Update face velocity history (used by FF term)
         if face_bounds is not None:
@@ -199,10 +254,12 @@ class Logic:
     def _drive_toward_face(self, face_bounds, dist_m, dt):
         # Lateral error in PIXELS
         dx = face_bounds["cx_px"] - FRAME_WIDTH_PX / 2.0
+        if abs(dx) < 20:
+            dx = 0.0
 
         # Distance error in METRES
         dist_error = dist_m - TARGET_FOLLOW_DISTANCE_M
-
+ 
         # PID outputs
         ang_z = self._pan_pid.compute(dx, dt, integral_max=INTEGRAL_MAX_PAN)
         lin_x = self._dist_pid.compute(dist_error, dt, integral_max=INTEGRAL_MAX_DIST)
@@ -210,6 +267,8 @@ class Logic:
         # Velocity feed-forward — if the person is drifting right (+vel_x),
         # add extra rotation.
         vel_ff = self._last_target_vel_x * PAN_FF_GAIN
+        if abs(self._last_target_vel_x) < 10:   # add this
+            vel_ff = 0.0                         # add this
         vel_ff = max(-0.3, min(0.3, vel_ff))
         ang_z += vel_ff
 
@@ -232,6 +291,9 @@ class Logic:
             self._collision_frame_count += 1
         else:
             self._collision_frame_count = 0
+            
+        ang_z = 0.4 * ang_z + 0.6 * self._prev_angular
+        lin_x = 0.4 * lin_x + 0.6 * self._prev_linear
             
         if self._collision_frame_count >= 3:  # ~0.5s of collision proximity
             lin_x = 0.0
@@ -301,7 +363,7 @@ class Logic:
         if w_px <= 0:
             return float("inf")
         
-        raw_dist = (FACE_WIDTH_M * FOCAL_LENGTH_PX) / w_px
+        raw_dist = (FACE_WIDTH_M * FOCAL_LENGTH_PX) / w_px   # rename existing return value
 
         # Seed on first valid reading; blend on subsequent ones
         if self._smooth_dist is None:
