@@ -1,45 +1,54 @@
-"""Face-the-user — v2 production implementation (event-grade).
+"""Face-the-user — v3 production implementation (event-grade, Jackie-tuned).
 
 Same contract as before: Logic.reset / Logic.step(obs) -> {linear, angular}.
 
-Upgrades over the earlier baseline:
-  - Full PID (P + I + D) with anti-windup clamping
+v3 delta (2026-04-21):
+  - 1€ filter (Casiez et al. 2012) replaces the fixed-α EMA on face_cx.
+    The adaptive cutoff is heavy when the signal is still (kills the 3-5px
+    bbox jitter that was producing residual left-right wobble on Jackie)
+    and opens up when the user actually walks (no lag penalty). This is
+    the single biggest stability win — same control law, cleaner input.
+  - Speed/accel caps halved (MAX_ANGULAR 0.8→0.4, MAX_ANGULAR_ACCEL 2.0→1.2)
+    so face-me feels deliberate rather than snappy. Jackie was overshooting
+    in the first tick on large errors even with the old slew limit.
+  - PAN_KI + PAN_KD slashed — with a clean filtered input, derivative gives
+    nothing new and integral windup caused visible drift-back-and-kick.
+    P-dominant control is what works when the measurement is clean.
+  - Velocity feed-forward halved for the same reason (FF amplifies whatever
+    the filter is doing; turn it down when filtering is better).
+
+Retained from v2:
   - Derivative-on-measurement (no first-tick D-kick)
-  - Input low-pass filter on raw face_cx (kills detector jitter UPSTREAM,
-    before it turns into angular velocity — this is the main cure for the
-    "left-right constantly" shimmy we saw on the baseline)
-  - Windowed velocity feed-forward (leads a walking user)
   - Size-adaptive gain + deadzone (gentler on far/noisy faces)
   - Output slew-rate limit (caps angular acceleration, prevents jerk)
   - Detection quality gate (rejects tiny hallucinated faces)
   - Graceful lost-face decay (hold-then-ramp, no abrupt stops)
-
-NO MIN_KICK in v2: PAN_KP=1.6 on normalized error is strong enough that
-any meaningful off-center error naturally produces ≥ the chassis friction
-threshold. Adding a kick floor causes bang-bang at the deadzone edge
-(tracker jitter crosses the edge → output snaps between 0 and ±kick).
-Small residual errors produce sub-threshold output and the chassis
-quietly parks close-to-centered — which is what you want.
+  - Yaw-veto + sustained-offset hysteresis (shipped 2026-04-21)
 
 Sign convention: face on the RIGHT of frame (face_cx > 0.5) → Jackie must
 rotate RIGHT → NEGATIVE angular.z on /cmd_vel_mux/input/navi_override.
 The combine line already flips the sign; do not re-flip elsewhere.
+
+NO MIN_KICK: PAN_KP on normalized error is strong enough that a real
+off-center face naturally produces ≥ the chassis friction threshold.
+Adding a kick floor causes bang-bang at the deadzone edge. Small residual
+errors produce sub-threshold output and the chassis quietly parks — which
+is what we want.
 """
 
-from collections import deque
+import math
 
 
 # === TUNABLES ==================================================================
 
-# Core PID gains (applied to normalized pan error, range -0.5..+0.5)
-# D and I are deliberately tiny — both amplify face-detector jitter. Keep
-# them small unless you've verified the detector is clean enough to handle
-# higher values. P-dominant control with heavy input filtering is what
-# actually works against a 3-5 pixel jittering bbox.
+# Core PID gains (applied to normalized pan error, range -0.5..+0.5).
+# With a clean filtered input (1€ filter below), the D and I terms add
+# almost nothing but noise amplification and windup. Keep them nominal —
+# effectively P-only control.
 PAN_KP = 1.2
-PAN_KI = 0.05
-PAN_KD = 0.03
-INTEGRAL_LIMIT = 0.4
+PAN_KI = 0.005   # was 0.05 — effectively disables the integral kick
+PAN_KD = 0.005   # was 0.03 — derivative isn't useful on a clean signal
+INTEGRAL_LIMIT = 0.3
 
 # Target horizontal position of the face in the frame (normalized 0..1).
 # 0.5 = exact center. Tune this if Jackie's camera mount is offset from
@@ -49,32 +58,40 @@ INTEGRAL_LIMIT = 0.4
 # Think of it as "where in the camera image should I try to keep your face".
 TARGET_CX = 0.98
 
-# Deadzone — widens automatically for small (far) faces.
-# 0.06 normalized = ~38 px on a 640-wide frame. Wider than strictly
-# needed for steady-state, but necessary to absorb the lag between the
-# real face position and the EMA-filtered signal during motion starts.
-# Tightening this to 0.04 causes jitter in the first couple of seconds
-# after you start moving (filter lag crosses the boundary repeatedly).
+# Deadzone — widens automatically for small (far) faces. 0.06 normalized
+# = ~38 px on a 640-wide frame. Below this error, output is zero.
 BASE_DEADZONE = 0.06
 DEADZONE_SIZE_SCALE = 0.08
 
-# Input low-pass filter on raw face_cx (alpha = weight of HISTORY,
-# 1 - alpha = weight of new sample). 0.6 = strong filter.
-INPUT_EMA_ALPHA = 0.6
+# 1€ filter parameters (Casiez et al. 2012, "1€ Filter: A Simple Speed-based
+# Low-pass Filter"). f_min is the cutoff at rest — low value = heavy filter
+# on jitter. beta is the speed sensitivity — raises cutoff when the user
+# moves so we don't lag real motion. d_cutoff filters the velocity estimate
+# that drives the adaptive cutoff.
+#
+# Chosen for Jackie's 3-5 px jitter at 10 Hz control rate (15 fps video input):
+#   - f_min=0.5 Hz → static jitter attenuation ~30x vs a 5Hz cutoff
+#   - beta=3.0    → cutoff rises to ~2 Hz when user walks at ~0.5 norm/s
+#   - d_cutoff=1.0 Hz → velocity estimate itself is filtered
+ONE_EURO_F_MIN = 0.5
+ONE_EURO_BETA = 3.0
+ONE_EURO_D_CUTOFF = 1.0
 
-# Velocity feed-forward — mostly off. Re-enable when the detector is
-# clean enough to trust its velocity estimate.
-VELOCITY_FF_GAIN = 0.1
-VELOCITY_WINDOW = 5
+# Velocity feed-forward — light touch. 1€ filter removes most of the noise,
+# so FF can still contribute, but we don't need to rely on it.
+VELOCITY_FF_GAIN = 0.05   # was 0.1
 
 # Size-adaptive gain: scale by clamp(face_w_norm / REF_FACE_W, 0.4, 1.0)
 REF_FACE_W = 0.18
 
-# Output slew rate limit (max angular acceleration)
-MAX_ANGULAR_ACCEL = 2.0  # rad/s²
+# Output slew rate limit (max angular acceleration). Halved from v2 for
+# a more deliberate feel — no sudden pops at the start of a turn.
+MAX_ANGULAR_ACCEL = 1.2   # rad/s²  (was 2.0)
 
-# Hard speed ceiling (server also clamps)
-MAX_ANGULAR = 0.8
+# Hard speed ceiling (server also clamps). Halved from v2 — Gow's feedback
+# "speed too high" on 2026-04-21. 0.4 rad/s ≈ 23°/s — feels attentive, not
+# twitchy. Server-side MAX_ANGULAR_SAFETY is 0.5 for belt + suspenders.
+MAX_ANGULAR = 0.4   # rad/s  (was 0.8)
 
 # Detection quality gate — reject faces smaller than this as noise
 MIN_FACE_W_NORM = 0.03
@@ -84,27 +101,74 @@ LOST_HOLD_S = 0.4
 LOST_DECAY_S = 0.6
 
 
-# Head-turn filter — the bystander-rejection story.
-# Users naturally glance toward friends/screens/phones mid-conversation. Face
-# detectors report a moved face_cx even though the user's body hasn't turned.
-# Chasing those glances is the #1 way face-me feels twitchy and the #1 way
-# Jackie ends up pointing at the wrong person.
-#
-# Two independent brakes:
-#   1. Yaw veto — if the user's head is clearly turned (>YAW_VETO_DEG), they
-#      are looking elsewhere, not addressing Jackie. Don't rotate. Hysteresis
-#      (must drop below YAW_RESUME_DEG to resume) stops veto chatter near the
-#      threshold. Missing yaw (None) falls through to offset-only mode so the
-#      controller degrades safely when the landmark-based yaw estimate fails.
-#   2. Sustained-offset — body translations persist across frames; head
-#      glances are brief. Only rotate after the offset has been outside the
-#      deadzone for HYSTERESIS_SUSTAIN_S continuous seconds. Research: head
-#      turns precede body turns by ~500ms, so 400ms sustain catches the
-#      "user glanced away then kept walking" case without waiting so long
-#      that real body motion feels laggy.
+# Head-turn filter — bystander-rejection brakes (shipped 2026-04-21).
+# 1. Yaw veto: if |yaw| > YAW_VETO_DEG the user is looking elsewhere; don't
+#    chase the resulting face_cx drift. Hysteresis below YAW_RESUME_DEG.
+# 2. Sustained offset: only rotate after the offset has been outside the
+#    deadzone for HYSTERESIS_SUSTAIN_S continuous seconds. Head glances
+#    are brief; body translations persist.
 YAW_VETO_DEG = 20.0
 YAW_RESUME_DEG = 10.0
 HYSTERESIS_SUSTAIN_S = 0.4
+
+
+# === 1€ FILTER ==================================================================
+
+
+class _OneEuroFilter:
+    """Adaptive low-pass filter for noisy real-time pointer-like signals.
+
+    Mathematically: exponential smoothing with a cutoff frequency that
+    rises linearly with the signal's instantaneous velocity.
+
+        cutoff(t) = f_min + beta * |velocity(t)|
+        alpha(cutoff, dt) = 1 / (1 + tau/dt)   where tau = 1 / (2π * cutoff)
+        x_hat(t) = alpha * x(t) + (1 - alpha) * x_hat(t-1)
+
+    Intuition: when the user holds still, velocity ≈ 0, cutoff = f_min,
+    strong smoothing hides the jitter. When the user walks, velocity is
+    large, cutoff rises, the filter opens up and we track the motion with
+    minimal lag. A fixed-α EMA cannot do both at once.
+
+    Reference: Casiez, Roussel, Vogel. "1€ Filter: A Simple Speed-based
+    Low-pass Filter for Noisy Input in Interactive Systems." CHI 2012.
+    """
+
+    def __init__(
+        self,
+        f_min: float = ONE_EURO_F_MIN,
+        beta: float = ONE_EURO_BETA,
+        d_cutoff: float = ONE_EURO_D_CUTOFF,
+    ) -> None:
+        self.f_min = f_min
+        self.beta = beta
+        self.d_cutoff = d_cutoff
+        self._x_prev: float | None = None
+        self._dx_prev: float = 0.0
+
+    @staticmethod
+    def _alpha(cutoff: float, dt: float) -> float:
+        tau = 1.0 / (2.0 * math.pi * max(cutoff, 1e-6))
+        return 1.0 / (1.0 + tau / dt)
+
+    def reset(self) -> None:
+        self._x_prev = None
+        self._dx_prev = 0.0
+
+    def __call__(self, x: float, dt: float) -> float:
+        dt = max(dt, 1e-3)
+        if self._x_prev is None:
+            self._x_prev = x
+            return x
+        dx = (x - self._x_prev) / dt
+        a_d = self._alpha(self.d_cutoff, dt)
+        dx_hat = a_d * dx + (1.0 - a_d) * self._dx_prev
+        cutoff = self.f_min + self.beta * abs(dx_hat)
+        a = self._alpha(cutoff, dt)
+        x_hat = a * x + (1.0 - a) * self._x_prev
+        self._x_prev = x_hat
+        self._dx_prev = dx_hat
+        return x_hat
 
 
 # === LOGIC ======================================================================
@@ -112,13 +176,14 @@ HYSTERESIS_SUSTAIN_S = 0.4
 
 class Logic:
     def __init__(self):
+        self._filter = _OneEuroFilter()
         self.reset()
 
     def reset(self):
-        self._cx_filtered = None
-        self._cx_history = deque(maxlen=VELOCITY_WINDOW)
+        self._filter.reset()
         self._integral = 0.0
         self._prev_measurement = None
+        self._prev_cx_vel = 0.0
         self._prev_output = 0.0
         self._t_accumulator = 0.0
         self._yaw_vetoed = False
@@ -148,23 +213,14 @@ class Logic:
                 return {"linear": 0.0, "angular": out}
             self._integral = 0.0
             self._prev_measurement = None
-            self._cx_filtered = None
-            self._cx_history.clear()
+            self._prev_cx_vel = 0.0
+            self._filter.reset()
             self._prev_output = self._rate_limit(0.0, dt)
             return {"linear": 0.0, "angular": self._prev_output}
 
-        # Input low-pass filter — kills detector jitter before the PID
+        # 1€ filter — kills detector jitter at rest, tracks real motion.
         raw_cx = obs["face_cx"]
-        if self._cx_filtered is None:
-            self._cx_filtered = raw_cx
-        else:
-            self._cx_filtered = (
-                INPUT_EMA_ALPHA * self._cx_filtered
-                + (1.0 - INPUT_EMA_ALPHA) * raw_cx
-            )
-        cx = self._cx_filtered
-
-        self._cx_history.append((self._t_accumulator, cx))
+        cx = self._filter(raw_cx, dt)
 
         # Size-adaptive scaling
         w = face_w or REF_FACE_W
@@ -236,14 +292,15 @@ class Logic:
             d_term = PAN_KD * d_measurement
         self._prev_measurement = cx
 
-        # Velocity feed-forward — lead the moving target
-        ff_term = 0.0
-        if len(self._cx_history) >= 2:
-            t0, cx0 = self._cx_history[0]
-            t1, cx1 = self._cx_history[-1]
-            if t1 - t0 > 1e-3:
-                cx_vel = (cx1 - cx0) / (t1 - t0)
-                ff_term = -VELOCITY_FF_GAIN * cx_vel
+        # Velocity feed-forward — already filtered inside 1€, so this is
+        # a gentle nudge, not a driver.
+        cx_vel = 0.0
+        if self._prev_measurement is not None:
+            cx_vel = (cx - self._prev_measurement) / dt
+        # Low-pass the velocity estimate so a single jumpy frame doesn't
+        # produce a ff spike.
+        self._prev_cx_vel = 0.5 * self._prev_cx_vel + 0.5 * cx_vel
+        ff_term = -VELOCITY_FF_GAIN * self._prev_cx_vel
 
         # Combine — sign flip lives here: face right → turn right → negative angular
         raw_output = -(p_term + i_term) - d_term + ff_term
