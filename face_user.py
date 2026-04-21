@@ -84,6 +84,29 @@ LOST_HOLD_S = 0.4
 LOST_DECAY_S = 0.6
 
 
+# Head-turn filter — the bystander-rejection story.
+# Users naturally glance toward friends/screens/phones mid-conversation. Face
+# detectors report a moved face_cx even though the user's body hasn't turned.
+# Chasing those glances is the #1 way face-me feels twitchy and the #1 way
+# Jackie ends up pointing at the wrong person.
+#
+# Two independent brakes:
+#   1. Yaw veto — if the user's head is clearly turned (>YAW_VETO_DEG), they
+#      are looking elsewhere, not addressing Jackie. Don't rotate. Hysteresis
+#      (must drop below YAW_RESUME_DEG to resume) stops veto chatter near the
+#      threshold. Missing yaw (None) falls through to offset-only mode so the
+#      controller degrades safely when the landmark-based yaw estimate fails.
+#   2. Sustained-offset — body translations persist across frames; head
+#      glances are brief. Only rotate after the offset has been outside the
+#      deadzone for HYSTERESIS_SUSTAIN_S continuous seconds. Research: head
+#      turns precede body turns by ~500ms, so 400ms sustain catches the
+#      "user glanced away then kept walking" case without waiting so long
+#      that real body motion feels laggy.
+YAW_VETO_DEG = 20.0
+YAW_RESUME_DEG = 10.0
+HYSTERESIS_SUSTAIN_S = 0.4
+
+
 # === LOGIC ======================================================================
 
 
@@ -98,6 +121,8 @@ class Logic:
         self._prev_measurement = None
         self._prev_output = 0.0
         self._t_accumulator = 0.0
+        self._yaw_vetoed = False
+        self._offset_sustained_since = None
 
     def step(self, obs):
         dt = max(obs["dt"], 1e-3)
@@ -154,8 +179,45 @@ class Logic:
         error = cx - TARGET_CX
         if abs(error) < deadzone:
             error_effective = 0.0
+            self._offset_sustained_since = None
         else:
             error_effective = (abs(error) - deadzone) * (1.0 if error > 0 else -1.0)
+            if self._offset_sustained_since is None:
+                self._offset_sustained_since = self._t_accumulator
+
+        # Yaw veto — user's head is turned away from Jackie. Decay current
+        # output toward zero (respecting slew) and freeze PID state. None
+        # yaw (MediaPipe failure) falls through — the caller treats missing
+        # yaw as "unknown, trust offset logic".
+        yaw = obs.get("face_yaw_deg")
+        if yaw is not None:
+            ayaw = abs(yaw)
+            if ayaw > YAW_VETO_DEG:
+                self._yaw_vetoed = True
+            elif self._yaw_vetoed and ayaw < YAW_RESUME_DEG:
+                self._yaw_vetoed = False
+
+        if self._yaw_vetoed:
+            self._integral = 0.0
+            self._offset_sustained_since = None
+            out = self._rate_limit(0.0, dt)
+            self._prev_output = out
+            self._prev_measurement = cx
+            return {"linear": 0.0, "angular": out}
+
+        # Sustained-offset hysteresis — brief glances shouldn't trigger a
+        # rotation. Wait for the offset to persist across HYSTERESIS_SUSTAIN_S
+        # before engaging the PID. Anti-windup: keep integral frozen during
+        # the wait window so we don't store up a kick.
+        if (
+            self._offset_sustained_since is not None
+            and (self._t_accumulator - self._offset_sustained_since)
+            < HYSTERESIS_SUSTAIN_S
+        ):
+            out = self._rate_limit(0.0, dt)
+            self._prev_output = out
+            self._prev_measurement = cx
+            return {"linear": 0.0, "angular": out}
 
         # Proportional
         p_term = PAN_KP * error_effective
