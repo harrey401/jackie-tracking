@@ -40,6 +40,7 @@ Hot-reloaded by `smait/navigation/tracking_loader.py` on file mtime change.
 
 import math
 from collections import deque
+from motion_logger import MotionLogger
 
 # ───── Geometry / speed caps ───────────────────────────────────────────────
 FRAME_WIDTH_PX       = 640
@@ -306,6 +307,10 @@ class Logic:
 
         # Locked target (server-side also enforces; belt and suspenders)
         self.locked_track_id: int | None = None
+        
+        # Create a motion logger instance for logging Jackie's motions
+        self._logger = MotionLogger()
+        
 
     # ------------------------------------------------------------------
     def reset(self) -> None:
@@ -323,6 +328,7 @@ class Logic:
         self._prev_linear = 0.0
         self._prev_angular = 0.0
         self.locked_track_id = None
+        self._logger = MotionLogger()  # Start a new log session on reset
 
     # ------------------------------------------------------------------
     def step(self, obs: dict) -> dict:
@@ -526,6 +532,7 @@ class Logic:
             self._obstacle_trip = 0
         elif next_state == COLLISION_TURN:
             self._start_manoeuvre(SCAN_45_RAD, -1.0)
+        self._logger.log_state_change(self._fsm, next_state, self._t_accum)
 
     def _start_manoeuvre(self, angle_rad: float, direction: float) -> None:
         self._scan_direction = direction
@@ -557,7 +564,19 @@ class Logic:
             return prev - max_step
         return target
 
-    def _out(self, linear: float, angular: float) -> dict:
+    def _out(self, linear: float, angular: float, obs: dict= None) -> dict:
         self._prev_linear = linear
         self._prev_angular = angular
+        
+        face_visible = obs.get("face_visible") if obs is not None else None
+        
+        self._logger.log_tick({
+            "t_accum":          self._t_accum,
+            "fsm_state":        self._fsm,
+            "face_visible":     face_visible,
+            "dist_m":           self._smooth_dist,
+            "linear_cmd":       linear,
+            "angular_cmd":      angular,
+        })
+       
         return {"linear": linear, "angular": angular}
