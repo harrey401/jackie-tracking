@@ -310,7 +310,14 @@ class Logic:
         
         # Create a motion logger instance for logging Jackie's motions
         self._logger = MotionLogger()
-        
+
+        # Per-tick observation cache — populated in step(), read by _out()
+        self._cur_face_cx:        float | None = None
+        self._cur_face_visible:   bool  | None = None
+        self._cur_dx_norm:        float | None = None
+        self._cur_lidar_fwd:      float | None = None
+        self._cur_obstacle_region: int         = 0
+
 
     # ------------------------------------------------------------------
     def reset(self) -> None:
@@ -329,6 +336,11 @@ class Logic:
         self._prev_angular = 0.0
         self.locked_track_id = None
         self._logger = MotionLogger()  # Start a new log session on reset
+        self._cur_face_cx         = None
+        self._cur_face_visible    = None
+        self._cur_dx_norm         = None
+        self._cur_lidar_fwd       = None
+        self._cur_obstacle_region = 0
 
     # ------------------------------------------------------------------
     def step(self, obs: dict) -> dict:
@@ -339,8 +351,20 @@ class Logic:
         dist_m = self._update_distance(face) if face else float("inf")
         cx_filt_norm, vx_filt_norm = self._update_cx(face, dt, obs)
 
+        # Capture per-tick observations so _out() can log them without
+        # needing obs threaded through every call site.
+        self._cur_face_cx      = obs.get("face_cx")
+        self._cur_face_visible = bool(obs.get("face_visible"))
+        self._cur_dx_norm      = cx_filt_norm
+        fwd = _forward_min_range(obs, LIDAR_BUBBLE_ARC_RAD)
+        self._cur_lidar_fwd    = fwd if math.isfinite(fwd) else None
+
         # Obstacle-region veto (trips COLLISION_STOP independently of LIDAR).
-        region = int(obs.get("obstacle_region") or 0)
+        try:
+            region = int(obs.get("obstacle_region") or 0)
+        except (ValueError, TypeError):
+            region = 0
+        self._cur_obstacle_region = region
         if region != 0:
             self._obstacle_trip += 1
         else:
@@ -515,6 +539,7 @@ class Logic:
 
     # ── FSM plumbing ───────────────────────────────────────────────────
     def _enter_state(self, next_state: str) -> None:
+        prev_state = self._fsm
         self._fsm = next_state
         if next_state == FOLLOWING:
             self._pan.reset()
@@ -532,7 +557,7 @@ class Logic:
             self._obstacle_trip = 0
         elif next_state == COLLISION_TURN:
             self._start_manoeuvre(SCAN_45_RAD, -1.0)
-        self._logger.log_state_change(self._fsm, next_state, self._t_accum)
+        self._logger.log_state_change(prev_state, next_state, self._t_accum)
 
     def _start_manoeuvre(self, angle_rad: float, direction: float) -> None:
         self._scan_direction = direction
@@ -564,19 +589,19 @@ class Logic:
             return prev - max_step
         return target
 
-    def _out(self, linear: float, angular: float, obs: dict= None) -> dict:
-        self._prev_linear = linear
+    def _out(self, linear: float, angular: float) -> dict:
+        self._prev_linear  = linear
         self._prev_angular = angular
-        
-        face_visible = obs.get("face_visible") if obs is not None else None
-        
         self._logger.log_tick({
-            "t_accum":          self._t_accum,
-            "fsm_state":        self._fsm,
-            "face_visible":     face_visible,
-            "dist_m":           self._smooth_dist,
-            "linear_cmd":       linear,
-            "angular_cmd":      angular,
+            "t_accum":           self._t_accum,
+            "fsm_state":         self._fsm,
+            "face_visible":      self._cur_face_visible,
+            "face_cx":           self._cur_face_cx,
+            "dx_norm":           self._cur_dx_norm,
+            "dist_m":            self._smooth_dist,
+            "linear_cmd":        linear,
+            "angular_cmd":       angular,
+            "lidar_forward_min": self._cur_lidar_fwd,
+            "obstacle_region":   self._cur_obstacle_region,
         })
-       
         return {"linear": linear, "angular": angular}
