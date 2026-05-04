@@ -4,6 +4,7 @@ __pycache__/
 UPGRADES.md
 .DS_Store
 .idea/
+<<<<<<< HEAD
 data/
 ed25519.pub
 ed25519.pub.pub
@@ -15,3 +16,6 @@ logs/
 .claude/
 .env.example
 
+=======
+logs/
+>>>>>>> 75f39f9 (Updating gitignore file)
