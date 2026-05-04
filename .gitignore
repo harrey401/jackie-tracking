@@ -2,5 +2,20 @@ __pycache__/
 
 # Private upgrade notes (kept local — not shared with collaborators)
 UPGRADES.md
+.DS_Store
 .idea/
+<<<<<<< HEAD
 logs/
+=======
+data/
+ed25519.pub
+ed25519.pub.pub
+sqlite-snapshot/
+logs/
+.vscode/
+.venv/
+.env
+.claude/
+.env.example
+
+>>>>>>> 7b8cefc36aa8039e479271f8e0450c22ecf90f4a
