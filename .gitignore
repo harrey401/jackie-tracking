@@ -15,3 +15,4 @@ logs/
 .claude/
 .env.example
 
+logs/
